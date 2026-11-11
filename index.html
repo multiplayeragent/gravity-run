@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gravity Run</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: #0d0b24; }
+  body { font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #fff; user-select: none; -webkit-user-select: none; }
+  canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; touch-action: none; }
+  .hud { position: fixed; pointer-events: none; text-shadow: 0 2px 6px #000c; }
+  #place { top: max(10px, env(safe-area-inset-top)); left: max(14px, env(safe-area-inset-left)); font: 900 30px/1.05 system-ui, sans-serif; }
+  #place small { display: block; font-size: 13px; font-weight: 700; opacity: .9; }
+  #track { top: calc(max(10px, env(safe-area-inset-top)) + 12px); right: max(36px, calc(env(safe-area-inset-right) + 36px)); width: min(420px, 50vw); height: 8px; border-radius: 4px; background: #ffffff22; }
+  #track i { position: absolute; top: -4px; width: 16px; height: 16px; margin-left: -8px; border-radius: 50%; border: 2px solid #fff; box-sizing: border-box; }
+  #track i.me { width: 22px; height: 22px; top: -7px; margin-left: -11px; z-index: 2; box-shadow: 0 0 0 2px #ffe14d; }
+  #track b { position: absolute; right: -18px; top: -12px; font-size: 20px; }
+  #track[hidden], #over[hidden], #flipBtn[hidden] { display: none; }
+  #msg { top: 26%; left: 0; right: 0; text-align: center; font: 900 72px/1 system-ui, sans-serif; color: #ffe14d; -webkit-text-stroke: 3px #5a1a6a; }
+  #msg small { display: block; margin-top: 10px; font-size: 22px; color: #fff; -webkit-text-stroke: 0; }
+  #hint { top: calc(max(10px, env(safe-area-inset-top)) + 46px); left: 0; right: 0; text-align: center; font-size: 15px; font-weight: 700; padding: 0 12px; }
+  #net { bottom: max(6px, env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center; font-size: 12px; opacity: .8; }
+  #over { position: fixed; inset: 0; display: grid; place-items: center; background: #07051899; }
+  .card { width: min(380px, calc(100vw - 32px)); max-height: 86vh; overflow: auto; padding: 20px; border-radius: 16px; background: #1c1748f2; border: 1px solid #ffffff30; text-align: center; box-sizing: border-box; }
+  .card h2 { margin: 0 0 4px; font-size: 26px; color: #ffe14d; }
+  .card h3 { margin: 14px 0 4px; font-size: 13px; color: #8ff0ff; text-align: left; }
+  .card ol { margin: 0; padding-left: 24px; font-size: 14px; text-align: left; }
+  .card li span { float: right; font-variant-numeric: tabular-nums; } .card li.me { color: #ffe14d; font-weight: 700; }
+  .card p { margin: 10px 0 0; font-size: 13px; opacity: .75; }
+  button.go { width: 100%; min-height: 48px; margin-top: 16px; border: 0; border-radius: 12px; background: #ffe14d; color: #3a1a40; font: 800 17px system-ui, sans-serif; cursor: pointer; }
+  #flipBtn { position: fixed; right: max(14px, env(safe-area-inset-right)); bottom: calc(max(14px, env(safe-area-inset-bottom)) + 14px); width: 104px; height: 104px; border-radius: 50%; border: 2px solid #ffffffaa; background: #ff3fd855; color: #fff; font: 900 18px system-ui, sans-serif; touch-action: none; }
+  #flipBtn.on { background: #ff3fd8aa; }
+  @media (max-width: 560px) { #hint { top: calc(max(10px, env(safe-area-inset-top)) + 70px); font-size: 14px; } #msg { font-size: 56px; } }
+</style>
+<script src="https://cdn.multiplayeragent.com/sdk/mp.global.js"></script>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div class="hud" id="place"></div>
+<div class="hud" id="track" hidden><b>🏁</b></div>
+<div class="hud" id="hint"></div>
+<div class="hud" id="msg"></div>
+<div class="hud" id="net">Connecting…</div>
+<button id="flipBtn" hidden>FLIP</button>
+<div id="over" hidden><div class="card">
+  <h2 id="overTitle"></h2><div id="overSub"></div>
+  <h3>This race</h3><ol id="results"></ol>
+  <h3>Most races won</h3><ol id="board"><li>Loading…</li></ol>
+  <button class="go" id="again">Race again</button><p id="next"></p>
+</div></div>
+<script>
+/* ═══ GRAVITY RUN · a Multiplayer Agent starter ═════════════════════════════════════════
+ * Everyone runs on their own. One button flips your gravity: floor to ceiling and back.
+ * Dodge gaps and spikes, hit speed pads, reach the end first. Versus, 2–8 players; bots fill seats.
+ *
+ * WHERE THINGS ARE (search for the "── " headers):
+ *   CONFIG ........ speed, gravity, pads, the race timer, bots
+ *   CHUNKS ........ the course pieces, drawn as text (legend inside). A race strings them together.
+ *   CONNECTION .... MP_CONNECT, joining, the offline room, who is host, the shared clock
+ *   COURSE ........ builds one course from the race seed
+ *   RUNNERS ....... one physics step for anyone (you or a bot): run, flip, land, pads, spikes
+ *   RACE (HOST) ... countdown, finishers, the timer, results, the next race, the bots
+ *   BOTS .......... the bot brain: it tries "keep going" and "flip now" in its head, then reacts (a bit late, sometimes)
+ *   ME ............ your runner, falls and respawns. Each player writes only its own.
+ *   DRAW .......... the neon course, ghosts of the others, trails, particles
+ *   HUD & RESULTS . your place, the progress track, the countdown, results, leaderboard
+ *   INPUT ......... Space / click / tap / the FLIP button
+ *
+ * HOW THE MULTIPLAYER WORKS (a relay room: no server code):
+ *   - Each player writes its OWN entity: `p` (one JSON field: position, gravity, speed, dead,
+ *     finished time, race id) about 12 times a second, `hb` (heartbeat) once a second, `n`/`c` once.
+ *   - The HOST is the lowest sessionId among live players (heartbeat seen in the last 3s),
+ *     worked out every frame. Only the host writes `race` (ONE JSON field: id, version v,
+ *     phase grid|race|done, seed, startAt, endsAt, finishers, results), `bots` (~10/s) and
+ *     `clk` (its clock, every 2s). A new host adopts all three and carries on.
+ *   - Everyone builds the same course from race.seed. Runners don't touch: the others are ghosts.
+ *   - The host reads each player's own `p` to see who finished and when (no intents needed),
+ *     plus "again" {} from the results card.
+ *   - ?attract plays offline with bots only (the preview video is recorded from it).
+ *   - Leaderboard "race-wins": +1 for every race you win, shown on the results card.
+ */
+
+// ── CONFIG ──────────────────────────────────────────────────────────────────────────
+const CONFIG = {
+  seats: 6,              // bots fill the race up to this many runners
+  maxRunners: 8,
+  chunks: 20,            // course pieces between the start and the finish (picked by the seed)
+  countdown: 3000,       // ms of "3, 2, 1"
+  raceMs: 90000,         // the race ends after this: whoever got furthest wins
+  afterFirstMs: 8000,    // once someone finishes, the others get this long
+  resultsMs: 9000,       // ms the results show before the next race
+  speed: 8.5,            // running speed, tiles/s (everyone runs on their own)
+  padBoost: 1.5,         // a speed pad multiplies your speed by this...
+  padTime: 1.4,          // ...for this many seconds
+  gravity: 60, maxFall: 20,
+  flipKick: 3,           // a flip pushes you off the surface this fast
+  coyote: 0.08, buffer: 0.14, // forgiving flips (s): a little late off an edge, a little early before landing
+  respawnMs: 900,        // ms before you're back at the start of the piece you fell in
+  botReact: [70, 200],   // ms a bot takes to flip once it sees it must
+  botLook: 0.7,          // how far ahead a bot looks, in seconds (less = more mistakes)
+  botLate: 0.12,         // chance a bot reacts much too late (and probably falls)
+  botStartLag: 450,      // ms: bots leave the start line up to this late
+  sendMs: 80,            // how often your runner is sent (~12/s)
+  board: "race-wins",    // leaderboard: races won
+};
+const BOT_NAMES = ["Flux", "Pulse", "Orbit", "Volt", "Nova", "Blip", "Zap", "Quark"];
+const COLORS = ["#ff4f8b", "#34d0ff", "#ffd23f", "#4dff9a", "#b072ff", "#ff8a3d", "#f2f2f2", "#7dffea", "#ff5a5f", "#9cff57"];
+
+// ── CHUNKS ──────────────────────────────────────────────────────────────────────────
+// Every piece is 12 rows tall: row 0 is the ceiling, row 11 the floor. Every piece starts and ends
+// with floor AND ceiling (that's where you respawn). Legend (letters and symbols, never digits):
+//   .  air   #  wall   ^  spikes on the floor   v  spikes on the ceiling   >  speed pad (a wall you run on, faster)
+const F16 = "################", E16 = "................";
+const air = (n, row = E16) => Array(n).fill(row);
+const CHUNKS = {
+  start:      [F16 + F16, ...air(10, E16 + E16), F16 + F16],
+  flat:       [F16, ...air(10), "####>>>>########"],
+  floorGap:   [F16, ...air(10), "####.......#####"],
+  ceilGap:    ["#####.......####", ...air(10), F16],
+  spikesLow:  [F16, ...air(9), "....^^^^^^......", F16],
+  spikesHigh: [F16, "....vvvvvv......", ...air(9), F16],
+  pillarUp:   [F16, ...air(4), ...air(6, ".......###......"), F16],
+  pillarDown: [F16, ...air(6, ".......###......"), ...air(4), F16],
+  step:       [F16, ...air(7), ...air(3, "........########"), F16],
+  zigzag:     ["############......######", ...air(10, E16 + "........"), "####.....###############"],
+  padsHigh:   ["#####>>>>>>>####", ...air(9), "......^^^^......", F16],
+  island:     ["###.........######", ...air(4, "..................") , ...air(2, "...#########......"), ...air(4, ".................."), "###.........######"],
+  spikeDuo:   [F16 + "####", ".............vvvv...", ...air(8, E16 + "...."), "...^^^^.............", F16 + "####"],
+  finish:     [F16 + F16, ...air(10, E16 + E16), F16 + F16],
+};
+const ATTRACT_CHUNKS = ["floorGap", "spikesHigh", "pillarUp", "zigzag", "padsHigh", "island", "spikeDuo", "ceilGap", "step", "floorGap"];
+
+// ── CONNECTION ──────────────────────────────────────────────────────────────────────
+// The builder fills these in for this game. Downloaded from GitHub? Put your own pk_ key here.
+const MP_CONNECT = {
+  key: 'pk_REPLACE_ME',
+  room: 'gravity-run',
+  endpoint: 'wss://live.multiplayeragent.com',
+  apiUrl: 'https://api.multiplayeragent.com',
+};
+const ATTRACT = new URLSearchParams(location.search).has("attract");
+const $ = (id) => document.getElementById(id);
+
+/** Same shape as the SDK client, kept in this tab: offline play and ?attract. */
+function localRoom() {
+  const id = "local", state = { entities: { players: { [id]: {} } }, shared: {} }, subs = [];
+  let queued = false;
+  const emit = () => { if (!queued) { queued = true; queueMicrotask(() => { queued = false; subs.forEach((f) => f(state)); }); } };
+  const put = (o, k, v) => { if (typeof k === "object") Object.assign(o, k); else o[k] = v; emit(); };
+  return {
+    sessionId: id, state, offline: true,
+    me: { set: (k, v) => put(state.entities.players[id], k, v) },
+    setShared: (k, v) => put(state.shared, k, v),
+    onState: (f) => { subs.push(f); f(state); }, onJoin() {}, onLeave() {}, on() {}, send() {},
+    onDisconnect() {}, onReconnect() {}, leave: async () => {},
+  };
+}
+async function connect() {
+  if (ATTRACT || typeof MP === "undefined") return localRoom();
+  try {
+    const mp = await Promise.race([MP.join({ ...MP_CONNECT }), new Promise((_, no) => setTimeout(() => no(new Error("timed out")), 10000))]);
+    window.mp = mp; // the builder calls window.mp.leave() when the page closes
+    return mp;
+  } catch (e) {
+    console.warn("Playing offline:", e && e.message);
+    return localRoom();
+  }
+}
+const parse = (v, fb) => { if (typeof v !== "string") return fb; try { return JSON.parse(v); } catch { return fb; } };
+const parsed = new Map();
+/** A JSON value from state, parsed once per change (read-only: never mutate what this returns). */
+function parseOnce(key, raw, fallback) {
+  const c = parsed.get(key);
+  if (c && c.raw === raw) return c.v;
+  const v = parse(raw, fallback); parsed.set(key, { raw, v }); return v;
+}
+const shared = (key, fallback) => parseOnce("s:" + key, S.shared[key], fallback);
+let net = null, S = { entities: { players: {} }, shared: {} };
+const seenHb = new Map();
+/** Players whose heartbeat moved in the last 3s (plus us), sorted by sessionId. */
+function livePlayers() {
+  const now = performance.now(), out = [];
+  for (const [id, p] of Object.entries(S.entities.players || {})) {
+    const s = seenHb.get(id);
+    if (!s || s.hb !== p.hb) seenHb.set(id, { hb: p.hb, at: now });
+    if (id === net.sessionId || now - seenHb.get(id).at < 3000) out.push(id);
+  }
+  return out.sort();
+}
+let hostHold = 0, lastTick = performance.now(); // lastTick: when frame() last ran; hostHold: after a freeze, no hosting before this time (see frame())
+const isHost = () => performance.now() > hostHold && performance.now() - lastTick < 1000 && livePlayers()[0] === net.sessionId; // a tab whose loop has stopped doesn't host
+const humansHere = () => livePlayers().filter((id) => !(ATTRACT && id === net.sessionId));
+// The shared clock: the host's Date.now() plus its own offset, learned from `clk` changes.
+const clockSync = { offset: 0, seen: undefined, samples: [], lastWrite: 0 };
+const clock = () => Date.now() + clockSync.offset;
+function syncClock(now) {
+  if (isHost()) { if (now - clockSync.lastWrite > 2000) { clockSync.lastWrite = now; net.setShared("clk", clock()); } return; }
+  const clk = Number(S.shared.clk);
+  if (!clk || clk === clockSync.seen) return;
+  if (clockSync.seen !== undefined) { // the first value we see may be old; later changes are fresh
+    clockSync.samples = [...clockSync.samples.slice(-4), clk - Date.now()];
+    clockSync.offset = Math.max(...clockSync.samples); // the least-delayed sample is the best
+  }
+  clockSync.seen = clk;
+}
+
+// ── COURSE ──────────────────────────────────────────────────────────────────────────
+const ROWS = 12, SOLID = "#>";
+function mulberry32(a) { return () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+let C = null; // the course: { seed, cols, grid (one string per row), starts (where each piece begins), finish }
+/** One course from a seed: the start, CONFIG.chunks pieces (no piece twice in a row), the finish. */
+function buildCourse(seed) {
+  const rnd = mulberry32(seed), names = Object.keys(CHUNKS).filter((k) => k !== "start" && k !== "finish"), pick = [];
+  if (ATTRACT) pick.push(...ATTRACT_CHUNKS);
+  else while (pick.length < CONFIG.chunks) { const k = names[Math.floor(rnd() * names.length)]; if (k !== pick[pick.length - 1]) pick.push(k); }
+  const rows = Array(ROWS).fill(""), starts = [];
+  for (const name of ["start", ...pick, "finish"]) { starts.push(rows[0].length); CHUNKS[name].forEach((line, r) => { rows[r] += line; }); }
+  return { seed, cols: rows[0].length, grid: rows, starts, finish: starts[starts.length - 1] + 4 };
+}
+function ensureCourse(r) { if (!C || C.seed !== r.seed) { C = buildCourse(r.seed); paintCourse(); } }
+const tileAt = (c, r) => (r < 0 || r >= ROWS || c < 0 || c >= C.cols ? "." : C.grid[r][c]);
+const solid = (c, r) => SOLID.includes(tileAt(c, r));
+/** The start of the piece you're in: where you come back after a fall. */
+const checkpointAt = (x) => { let s = 0; for (const c of C.starts) if (c <= x) s = c; return s; };
+
+// ── RUNNERS ─────────────────────────────────────────────────────────────────────────
+const HW = 0.36, HH = 0.42; // half width and half height, in tiles (x, y is the middle of the body)
+const newRunner = (x) => ({ x, y: ROWS - 1 - HH, vy: 0, g: 1, ground: true, coyote: 0, buffer: 0, boost: 0, dead: false, deadAt: 0, fin: 0, blk: 0, trail: [] });
+const startX = () => 2; // everyone starts on the same spot: the others are ghosts
+/** One physics step. input = { flip (pressed now) }. Returns "flip", "land", "pad", "dead", "fin" or null. */
+function stepRunner(b, inp, dt) {
+  if (b.dead || b.fin) return null;
+  let ev = null;
+  b.coyote = b.ground ? CONFIG.coyote : b.coyote - dt;
+  b.buffer = inp.flip ? CONFIG.buffer : b.buffer - dt;
+  if (b.buffer > 0 && b.coyote > 0) { b.g = -b.g; b.vy = b.g * CONFIG.flipKick; b.ground = false; b.coyote = b.buffer = 0; ev = "flip"; }
+  b.boost = Math.max(0, b.boost - dt);
+  const was = b.ground, x0 = b.x;
+  b.x += CONFIG.speed * (b.boost > 0 ? CONFIG.padBoost : 1) * dt; // always running
+  for (let r = Math.floor(b.y - HH + 0.02); r <= Math.floor(b.y + HH - 0.02); r++) if (solid(Math.floor(b.x + HW), r)) b.x = Math.floor(b.x + HW) - HW - 0.001; // a wall stops you
+  b.blk = b.x - x0 < CONFIG.speed * dt * 0.3 ? b.blk + dt : 0;
+  b.vy = Math.max(-CONFIG.maxFall, Math.min(CONFIG.maxFall, b.vy + b.g * CONFIG.gravity * dt));
+  b.y += b.vy * dt; b.ground = false;
+  let under = "";
+  for (let c = Math.floor(b.x - HW + 0.02); c <= Math.floor(b.x + HW - 0.02); c++) {
+    if (b.vy > 0 && solid(c, Math.floor(b.y + HH))) { b.y = Math.floor(b.y + HH) - HH; b.vy = 0; if (b.g > 0) { b.ground = true; under += tileAt(c, Math.floor(b.y + HH + 0.5)); } }
+    else if (b.vy < 0 && solid(c, Math.floor(b.y - HH))) { b.y = Math.floor(b.y - HH) + 1 + HH; b.vy = 0; if (b.g < 0) { b.ground = true; under += tileAt(c, Math.floor(b.y - HH - 0.5)); } }
+  }
+  if (b.ground && !was) ev = ev || "land";
+  if (under.includes(">")) { if (b.boost < CONFIG.padTime - 0.2) ev = "pad"; b.boost = CONFIG.padTime; }
+  for (let r = Math.floor(b.y - HH); r <= Math.floor(b.y + HH); r++) for (let c = Math.floor(b.x - HW); c <= Math.floor(b.x + HW); c++) { // spikes fill the half of the tile they point out of
+    const t = tileAt(c, r), inX = b.x + HW > c + 0.15 && b.x - HW < c + 0.85;
+    if (inX && ((t === "^" && b.y + HH > r + 0.45) || (t === "v" && b.y - HH < r + 0.55))) { b.dead = true; return "dead"; }
+  }
+  if (b.y < -1.5 || b.y > ROWS + 1.5) { b.dead = true; return "dead"; }
+  if (b.x >= C.finish) return "fin";
+  return ev;
+}
+/** Back at the start of the piece you fell in, on the floor, gravity down. */
+function respawn(b) { Object.assign(b, newRunner(checkpointAt(b.x) + 1.2), { trail: [] }); }
+
+// ── RACE (HOST) ─────────────────────────────────────────────────────────────────────
+const host = { acting: false, last: null, bots: new Map(), lastBots: 0, raceId: -1, again: false };
+/** The race as state has it, or the host's own newer write that hasn't come back yet. `v` only goes up. */
+function race() {
+  const r = shared("race", null);
+  return host.last && isHost() && (!r || host.last.v > r.v) ? host.last : r;
+}
+function writeRace(r) { r = { ...r, v: (race()?.v ?? 0) + 1 }; host.last = r; net.setShared("race", JSON.stringify(r)); return r; }
+const newRace = (id) => ({ id, phase: "grid", seed: (Math.random() * 1e9) | 0, startAt: clock() + CONFIG.countdown, endsAt: 0, fins: [], results: [] });
+/** Become host: adopt the bots exactly as state has them (the race itself stays in state). */
+function adopt() {
+  host.acting = true; host.last = null; host.bots.clear(); host.raceId = race()?.id ?? -1;
+  for (const s of shared("bots", [])) host.bots.set(s.i, Object.assign(newRunner(s.x), { id: s.i, name: s.n, color: s.c, y: s.y, vy: s.vy || 0, g: s.g || 1, ground: false, dead: !!s.d, deadAt: performance.now(), fin: s.fin || 0 }));
+}
+/** A new race: as many bots as empty seats, everyone back on the start line. */
+function seatBots() {
+  const humans = humansHere(), want = Math.max(0, Math.min(CONFIG.seats, CONFIG.maxRunners) - humans.length);
+  while (host.bots.size > want) host.bots.delete([...host.bots.keys()].pop());
+  while (host.bots.size < want) {
+    const used = new Set([...host.bots.values()].map((b) => b.name)), taken = new Set([...humans.map(colorOf), ...[...host.bots.values()].map((b) => b.color)]);
+    const id = "b" + Math.random().toString(36).slice(2, 6);
+    host.bots.set(id, Object.assign(newRunner(0), { id, name: BOT_NAMES.find((n) => !used.has(n)) || "Bot", color: COLORS.find((c) => !taken.has(c)) || "#ccc" }));
+  }
+  let slot = humans.length;
+  for (const b of host.bots.values()) Object.assign(b, newRunner(startX(slot++)), { id: b.id, name: b.name, color: b.color, flipAt: 0, lag: 80 + Math.random() * CONFIG.botStartLag });
+}
+/** The race is over: one write with the final order. */
+function finishRace(r) {
+  const all = standings(r);
+  return writeRace({ ...r, phase: "done", endsAt: clock() + CONFIG.resultsMs, results: all.slice(0, 8).map((s) => ({ i: s.id, n: s.name, c: s.color, t: s.fin, x: Math.floor(s.x) })) });
+}
+function hostTick(dt, now) {
+  if (!host.acting) adopt();
+  let r = race();
+  if (!r) r = writeRace(newRace(1));
+  ensureCourse(r);
+  if (host.raceId !== r.id) { host.raceId = r.id; seatBots(); }
+  const T = clock();
+  if (r.phase === "grid" && T >= r.startAt) r = writeRace({ ...r, phase: "race", endsAt: r.startAt + CONFIG.raceMs });
+  if (r.phase === "race") {
+    for (const b of host.bots.values()) botTick(b, dt, now, r);
+    const fins = standings(r).filter((s) => s.fin && !r.fins.some((f) => f.i === s.id)); // new finishers, from each runner's own state
+    if (fins.length) r = writeRace({ ...r, fins: [...r.fins, ...fins.map((s) => ({ i: s.id, t: s.fin }))].sort((a, b) => a.t - b.t), endsAt: r.fins.length ? r.endsAt : Math.min(r.endsAt, T + CONFIG.afterFirstMs) });
+    const st = standings(r);
+    if (T >= r.endsAt || st.every((s) => s.fin)) r = finishRace(r);
+  }
+  if (r.phase === "done" && (T >= r.endsAt || host.again)) r = writeRace(newRace(r.id + 1));
+  host.again = false;
+  const humans = humansHere().length; // someone joined mid-race: a bot steps aside
+  while (host.bots.size && host.bots.size + humans > CONFIG.maxRunners) host.bots.delete([...host.bots.keys()].pop());
+  if (now - host.lastBots > 100) { host.lastBots = now; net.setShared("bots", JSON.stringify([...host.bots.values()].map(botWire))); } // ~10/s
+}
+const botWire = (b) => ({ i: b.id, n: b.name, c: b.color, x: +b.x.toFixed(2), y: +b.y.toFixed(2), vy: +b.vy.toFixed(1), g: b.g, d: b.dead ? 1 : 0, fin: b.fin, bo: b.boost > 0 ? 1 : 0 });
+const botList = () => (host.acting ? [...host.bots.values()].map(botWire) : shared("bots", []));
+
+// ── BOTS ────────────────────────────────────────────────────────────────────────────
+/** How long a runner lasts (up to `horizon` s) if it flips now or keeps going. A wall it can't get past counts as the end. */
+function lasts(b, flipNow, horizon) {
+  const s = { ...b, trail: null }, dt = 1 / 60;
+  for (let i = 0; i < horizon / dt; i++) {
+    const ev = stepRunner(s, { flip: flipNow && i === 0 }, dt);
+    if (ev === "fin") return horizon + 1;
+    if (s.dead || s.blk > 0.1) return i * dt;
+  }
+  return horizon;
+}
+/** The bot brain (also your autopilot in the preview): when keeping going ends badly and a flip helps, flip, a moment later. */
+function botInput(b, now) {
+  if (b.flipAt) { if (now >= b.flipAt) { b.flipAt = 0; return { flip: true }; } return {}; }
+  if (!b.ground || now < (b.thinkAt || 0)) return {};
+  b.thinkAt = now + 40;
+  const H = CONFIG.botLook, keep = lasts(b, false, H);
+  if (keep >= H) return {};
+  const flip = lasts(b, true, H);
+  if (flip >= H || (keep < 0.3 && flip > keep + 0.1)) { // flipping helps: react, a little late (sometimes much too late)
+    const late = Math.random() < CONFIG.botLate ? 150 + Math.random() * 250 : 0;
+    b.flipAt = now + Math.max(0, CONFIG.botReact[0] + Math.random() * (CONFIG.botReact[1] - CONFIG.botReact[0]) - (keep < 0.3 ? 120 : 0)) + late;
+  }
+  return {};
+}
+function botTick(b, dt, now, r) {
+  if (b.dead) { if (now - b.deadAt > CONFIG.respawnMs) { respawn(b); b.flipAt = 0; } return; }
+  if (b.fin) return;
+  const go = clock() >= r.startAt + (b.lag || 0); // bots react to GO a little late
+  const ev = stepRunner(b, go ? botInput(b, now) : {}, go ? dt : 0);
+  fxFor(b, ev, false);
+  if (ev === "dead") b.deadAt = now;
+  if (ev === "fin") b.fin = Math.max(1, Math.round(clock() - r.startAt));
+}
+
+// ── ME ──────────────────────────────────────────────────────────────────────────────
+const myName = (() => { try { return localStorage.getItem("mpa-name") || ""; } catch { return ""; } })() ||
+  ["Swift", "Neon", "Lucky", "Zippy", "Cosmic", "Turbo"][Math.floor(Math.random() * 6)] + " " + ["Comet", "Pixel", "Gecko", "Otter", "Spark", "Kit"][Math.floor(Math.random() * 6)];
+const me = Object.assign(newRunner(2), { id: "", color: COLORS[0], raceId: -1, lastSend: 0, shownFor: -1, auto: ATTRACT });
+const input = { flip: false };
+let shake = 0;
+const colorOf = (id) => (id === me.id ? me.color : (S.entities.players?.[id] || {}).c || "#ccc");
+/** Everyone in the race, best first: finishers by time, then the furthest along. */
+function standings(r) {
+  const out = [{ id: me.id, name: myName, color: me.color, x: me.x, fin: me.raceId === r.id ? me.fin : 0, mine: true }], live = new Set(livePlayers());
+  if (ATTRACT) out.length = 0;
+  for (const [id, p] of Object.entries(S.entities.players || {})) {
+    if (id === me.id || !live.has(id)) continue;
+    const s = parseOnce("p:" + id, p.p, null); if (s && s.r === r.id) out.push({ id, name: p.n || "Player", color: p.c || "#ccc", x: s.x, fin: s.fin || 0 });
+  }
+  for (const b of botList()) out.push({ id: b.i, name: b.n, color: b.c, x: b.x, fin: b.fin || 0, bot: true });
+  return out.sort((a, b) => (a.fin && b.fin ? a.fin - b.fin : (b.fin ? 1 : 0) - (a.fin ? 1 : 0)) || b.x - a.x);
+}
+function myTick(dt, now, r) {
+  if (me.raceId !== r.id) { // a new race: back to the start line
+    me.raceId = r.id;
+    Object.assign(me, newRunner(startX(Math.max(0, humansHere().indexOf(me.id)))));
+    $("over").hidden = true;
+  }
+  const inp = { flip: input.flip }; input.flip = false;
+  if (me.dead) { if (now - me.deadAt > CONFIG.respawnMs) { respawn(me); sfx("back"); } publish(false); return; }
+  if (me.fin || r.phase === "done") { publish(false); return; }
+  const go = clock() >= r.startAt;
+  const ev = stepRunner(me, !go ? {} : me.auto ? botInput(me, now) : inp, go ? dt : 0);
+  fxFor(me, ev, true);
+  if (ev === "dead") { me.deadAt = now; publish(true); }
+  if (ev === "fin") { me.fin = Math.max(1, Math.round(clock() - r.startAt)); publish(true); }
+  publish(false);
+}
+function publish(force) {
+  const now = performance.now();
+  if (!force && now - me.lastSend < CONFIG.sendMs) return;
+  me.lastSend = now;
+  net.me.set("p", JSON.stringify({ x: +me.x.toFixed(2), y: +me.y.toFixed(2), vy: +me.vy.toFixed(1), g: me.g, d: me.dead ? 1 : 0, fin: me.fin, bo: me.boost > 0 ? 1 : 0, r: me.raceId }));
+}
+/** Sounds and sparks for anyone's step event (sounds only for my own). */
+function fxFor(b, ev, mine) {
+  if (!ev) return;
+  const color = b.color || colorOf(b.id);
+  if (ev === "flip") { spray(b.x, b.y, 8, color, 4, 0.35, 0.12, 0); if (mine) sfx("flip"); }
+  if (ev === "land") spray(b.x, b.y + b.g * HH, 5, "#ffffffaa", 2.5, 0.25, 0.08, 0);
+  if (ev === "pad") { spray(b.x, b.y, 12, "#ffe14d", 6, 0.4, 0.12, 0); if (mine) { sfx("pad"); floater(b.x, b.y - 1, "SPEED!", "#ffe14d"); } }
+  if (ev === "dead") { spray(b.x, b.y, 24, color, 8, 0.7, 0.16, 0); spray(b.x, b.y, 10, "#ffffff", 5, 0.5, 0.1, 0); if (mine) { sfx("dead"); shake = 10; } }
+  if (ev === "fin") { confetti(b.x, b.y, 40); if (mine) sfx("win"); }
+}
+/** Two people in one color: the one with the higher sessionId picks a free color. */
+function fixColor() {
+  const others = Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId), botColors = botList().map((b) => b.c);
+  if (!others.some(([id, p]) => p.c === me.color && id < net.sessionId) && !botColors.includes(me.color)) return;
+  const taken = new Set([...others.map(([, p]) => p.c), ...botColors]), free = COLORS.find((c) => !taken.has(c));
+  if (free) { me.color = free; net.me.set("c", free); }
+}
+
+// ── DRAW ────────────────────────────────────────────────────────────────────────────
+const cv = $("game"), ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1, TS = 40;
+function fit() { DPR = Math.min(2, devicePixelRatio || 1); W = innerWidth; H = innerHeight; cv.width = W * DPR; cv.height = H * DPR; }
+addEventListener("resize", fit); addEventListener("orientationchange", fit); fit();
+const cam = { x: 0, oy: 0 };
+const sx = (x) => (x - cam.x) * TS, sy = (y) => cam.oy + y * TS;
+const views = new Map(); // everyone else (people, and bots unless I run them): eased toward their latest state
+function syncViews(dt, r) {
+  const now = performance.now(), k = 1 - Math.pow(0.0003, dt), seen = new Set(), live = new Set(livePlayers()), list = [];
+  for (const [id, p] of Object.entries(S.entities.players || {})) {
+    if (id === me.id || !live.has(id)) continue;
+    const s = parseOnce("p:" + id, p.p, null); if (s && s.r === r.id) list.push({ id, raw: p.p, s, name: p.n || "Player", color: p.c || "#ccc" });
+  }
+  if (!host.acting) for (const b of shared("bots", [])) list.push({ id: b.i, raw: b, s: b, name: b.n, color: b.c });
+  for (const o of list) {
+    seen.add(o.id);
+    let v = views.get(o.id);
+    if (!v) { v = { id: o.id, x: o.s.x, y: o.s.y, raw: null, trail: [] }; views.set(o.id, v); }
+    if (o.raw !== v.raw) {
+      if (o.s.d && !v.d) spray(v.x, v.y, 18, o.color, 7, 0.6, 0.14, 0);
+      const sp = CONFIG.speed * (o.s.bo ? CONFIG.padBoost : 1);
+      Object.assign(v, { tx: o.s.x, ty: o.s.y, vy: o.s.vy || 0, g: o.s.g || 1, d: o.s.d, fin: o.s.fin, bo: o.s.bo, vx: o.s.d || o.s.fin ? 0 : sp, name: o.name, color: o.color, raw: o.raw, at: now });
+      if (Math.abs(v.tx - v.x) > 4) { v.x = v.tx; v.y = v.ty; v.trail = []; } // respawned: jump there
+    }
+    const ahead = Math.min(0.15, (now - v.at) / 1000);
+    v.x += (v.tx + v.vx * ahead - v.x) * k; v.y += (v.ty - v.y) * k;
+  }
+  for (const id of views.keys()) if (!seen.has(id)) views.delete(id);
+}
+const parts = [], texts = [];
+function spray(x, y, n, color, speed, life, size, grav) { for (let i = 0; i < n && parts.length < 400; i++) { const a = Math.random() * Math.PI * 2, s = speed * (0.3 + Math.random() * 0.7); parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life, max: life, color, size, grav }); } }
+const confetti = (x, y, n) => { for (let i = 0; i < n; i++) spray(x, y, 1, COLORS[i % COLORS.length], 9, 1.2, 0.18, 6); };
+function floater(x, y, text, color) { if (!ATTRACT && texts.length < 8) texts.push({ x, y, text, color, t: 0 }); }
+const courseCv = document.createElement("canvas"), TP = 24; // the course, painted once per race
+function paintCourse() {
+  courseCv.width = C.cols * TP; courseCv.height = ROWS * TP;
+  const g = courseCv.getContext("2d");
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < C.cols; c++) {
+    const t = C.grid[r][c], X = c * TP, Y = r * TP;
+    if (t === "#") {
+      g.fillStyle = "#1d1850"; g.fillRect(X, Y, TP, TP);
+      g.fillStyle = "#2a2370"; g.fillRect(X + 2, Y + 2, TP - 4, TP - 4);
+      if (!solid(c, r - 1)) { g.fillStyle = "#34e2ff"; g.fillRect(X, Y, TP, 3); }
+      if (!solid(c, r + 1)) { g.fillStyle = "#ff3fd8"; g.fillRect(X, Y + TP - 3, TP, 3); }
+      if (!solid(c - 1, r)) { g.fillStyle = "#7d6cff"; g.fillRect(X, Y, 2, TP); }
+      if (!solid(c + 1, r)) { g.fillStyle = "#7d6cff"; g.fillRect(X + TP - 2, Y, 2, TP); }
+    } else if (t === ">") {
+      g.fillStyle = "#3a2a10"; g.fillRect(X, Y, TP, TP);
+      g.fillStyle = "#ffe14d"; for (let k = 0; k < 2; k++) { g.beginPath(); g.moveTo(X + 3 + k * 10, Y + 5); g.lineTo(X + 10 + k * 10, Y + TP / 2); g.lineTo(X + 3 + k * 10, Y + TP - 5); g.lineTo(X + 6 + k * 10, Y + TP / 2); g.fill(); }
+    } else if (t === "^" || t === "v") {
+      const up = t === "^";
+      for (let k = 0; k < 2; k++) {
+        const x0 = X + k * TP / 2;
+        g.fillStyle = "#ff3355"; g.beginPath(); g.moveTo(x0 + 1, up ? Y + TP : Y); g.lineTo(x0 + TP / 4, up ? Y + TP * 0.4 : Y + TP * 0.6); g.lineTo(x0 + TP / 2 - 1, up ? Y + TP : Y); g.fill();
+        g.fillStyle = "#ffb3c1"; g.beginPath(); g.moveTo(x0 + TP / 4 - 1, up ? Y + TP - 2 : Y + 2); g.lineTo(x0 + TP / 4, up ? Y + TP * 0.45 : Y + TP * 0.55); g.lineTo(x0 + TP / 4 + 1, up ? Y + TP - 2 : Y + 2); g.fill();
+      }
+    }
+  }
+  for (const s of C.starts.slice(1, -1)) { g.fillStyle = "#34e2ff22"; g.fillRect(s * TP, TP, 3, (ROWS - 2) * TP); } // each piece's start: where you come back
+  for (let r = 1; r < ROWS - 1; r++) { g.fillStyle = r % 2 ? "#ffffff" : "#111"; g.fillRect(C.finish * TP, r * TP, TP / 2, TP); g.fillStyle = r % 2 ? "#111" : "#ffffff"; g.fillRect(C.finish * TP + TP / 2, r * TP, TP / 2, TP); }
+}
+const STARS = Array.from({ length: 90 }, (_, i) => { const r = mulberry32(i * 131 + 7); return { x: r(), y: r(), s: 0.5 + r() * 1.8, d: 0.05 + r() * 0.25 }; });
+function drawBackground(t) {
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#0d0b24"); g.addColorStop(0.5, "#24124a"); g.addColorStop(1, "#0d0b24");
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  for (const s of STARS) { ctx.fillStyle = `rgba(255,255,255,${0.35 + 0.35 * Math.sin(t * 2 + s.x * 20)})`; ctx.fillRect(((s.x * W - cam.x * TS * s.d) % W + W) % W, s.y * H, s.s, s.s); }
+  ctx.strokeStyle = "#ff3fd81a"; ctx.lineWidth = 1; ctx.beginPath(); // a scrolling grid behind the course
+  const step = TS * 2, off = -((cam.x * TS * 0.5) % step);
+  for (let x = off; x < W; x += step) { ctx.moveTo(x, sy(0)); ctx.lineTo(x, sy(ROWS)); }
+  for (let r = 0; r <= ROWS; r += 2) { ctx.moveTo(0, sy(r)); ctx.lineTo(W, sy(r)); }
+  ctx.stroke();
+}
+function drawRunner(b, t, ghost) {
+  if (b.dead || b.d) return;
+  const x = sx(b.x), y = sy(b.y), r = HH * TS, g = b.g || 1;
+  if (b.trail && b.trail.length > 1) { // a fading streak behind you
+    ctx.lineCap = "round";
+    for (let i = 1; i < b.trail.length; i++) { const p = b.trail[i - 1], q = b.trail[i]; ctx.strokeStyle = b.color; ctx.globalAlpha = (i / b.trail.length) * (ghost ? 0.25 : 0.5); ctx.lineWidth = r * 1.2 * (i / b.trail.length); ctx.beginPath(); ctx.moveTo(sx(p[0]), sy(p[1])); ctx.lineTo(sx(q[0]), sy(q[1])); ctx.stroke(); }
+    ctx.globalAlpha = 1;
+  }
+  ctx.globalAlpha = ghost ? 0.55 : 1;
+  ctx.shadowColor = b.color; ctx.shadowBlur = ghost ? 6 : 16;
+  ctx.fillStyle = b.color; ctx.beginPath(); ctx.roundRect(x - HW * TS, y - r, HW * 2 * TS, r * 2, TS * 0.2); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "#ffffff55"; ctx.fillRect(x - HW * TS + TS * 0.08, y - g * r * 0.7 - TS * 0.04, HW * 2 * TS - TS * 0.16, TS * 0.08); // a stripe on the side away from the floor
+  const ey = y + g * r * 0.05 - g * TS * 0.08;
+  for (const s of [-1, 1]) { ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(x + TS * 0.12 + s * TS * 0.11, ey, TS * 0.08, 0, 7); ctx.fill(); ctx.fillStyle = "#14112e"; ctx.beginPath(); ctx.arc(x + TS * 0.15 + s * TS * 0.11, ey, TS * 0.04, 0, 7); ctx.fill(); }
+  if (b.boost > 0 || b.bo) { ctx.fillStyle = "#ffe14d"; for (let k = 0; k < 3; k++) ctx.fillRect(x - HW * TS - TS * (0.3 + k * 0.25) - ((t * 30 + k * 7) % 6), y - r * 0.6 + k * r * 0.5, TS * 0.18, 2); }
+  ctx.globalAlpha = 1;
+  if (!ATTRACT) {
+    ctx.font = `700 ${Math.max(11, Math.round(TS * 0.32))}px system-ui`; ctx.textAlign = "center"; ctx.lineWidth = 3; ctx.strokeStyle = "#000a";
+    const label = b.mine ? "You" : b.name || "", ly = g > 0 ? y - r - TS * 0.2 : y + r + TS * 0.45;
+    ctx.strokeText(label, x, ly); ctx.fillStyle = b.mine ? "#ffe14d" : "#fff"; ctx.globalAlpha = ghost ? 0.7 : 1; ctx.fillText(label, x, ly); ctx.globalAlpha = 1;
+  }
+}
+function pushTrail(b) { if (!b.trail) b.trail = []; b.trail.push([b.x, b.y]); if (b.trail.length > 14) b.trail.shift(); }
+function draw(r, now) {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const t = now / 1000;
+  if (!C) { drawBackground(t); return; }
+  TS = ATTRACT ? H / (ROWS - 0.6) : Math.max(16, Math.min(H / (ROWS + 2.5), W / 13)); // the preview zooms in a little
+  cam.oy = (H - ROWS * TS) / 2 + (touchUI && H > W ? -40 : 10);
+  const focus = ATTRACT ? packFocus(r) : me.x;
+  const want = Math.max(0, Math.min(C.cols - W / TS, focus - (W / TS) * 0.3));
+  cam.x += (want - cam.x) * Math.min(1, 8 * dtNow);
+  if (Math.abs(want - cam.x) > 30) cam.x = want; // respawned far back: cut there
+  shake *= 0.85;
+  ctx.setTransform(DPR, 0, 0, DPR, (Math.random() - 0.5) * shake * DPR, (Math.random() - 0.5) * shake * DPR);
+  drawBackground(t);
+  const srcX = Math.max(0, cam.x * TP), srcW = Math.min(courseCv.width - srcX, (W / TS) * TP + TP);
+  if (srcW > 0) ctx.drawImage(courseCv, srcX, 0, srcW, ROWS * TP, sx(srcX / TP), cam.oy, (srcW / TP) * TS, ROWS * TS);
+  for (const v of views.values()) { pushTrail(v); drawRunner({ ...v, name: v.name }, t, true); }
+  if (host.acting) for (const b of host.bots.values()) { pushTrail(b); drawRunner(b, t, true); }
+  pushTrail(me); drawRunner({ ...me, mine: !ATTRACT }, t, false);
+  for (const p of parts) { ctx.globalAlpha = Math.min(1, (p.life / p.max) * 2); ctx.fillStyle = p.color; ctx.fillRect(sx(p.x) - (p.size * TS) / 2, sy(p.y) - (p.size * TS) / 2, p.size * TS, p.size * TS); }
+  ctx.globalAlpha = 1;
+  for (const f of texts) { ctx.globalAlpha = Math.max(0, 1 - f.t / 1); ctx.font = `900 ${Math.round(TS * 0.45)}px system-ui`; ctx.textAlign = "center"; ctx.lineWidth = 4; ctx.strokeStyle = "#000a"; ctx.strokeText(f.text, sx(f.x), sy(f.y - f.t)); ctx.fillStyle = f.color; ctx.fillText(f.text, sx(f.x), sy(f.y - f.t)); }
+  ctx.globalAlpha = 1;
+}
+/** The preview films the pack: just behind the leader. */
+function packFocus(r) { const xs = [me.x, ...botList().map((b) => b.x)].sort((a, b) => b - a); return xs[Math.min(1, xs.length - 1)]; }
+function tickFx(dt) {
+  for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.life -= dt; p.vy += p.grav * dt; p.x += p.vx * dt; p.y += p.vy * dt; if (p.life <= 0) parts.splice(i, 1); }
+  for (let i = texts.length - 1; i >= 0; i--) if ((texts[i].t += dt) > 1) texts.splice(i, 1);
+}
+
+// ── HUD & RESULTS ───────────────────────────────────────────────────────────────────
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const ordinal = (n) => n + (n % 10 === 1 && n % 100 !== 11 ? "st" : n % 10 === 2 && n % 100 !== 12 ? "nd" : n % 10 === 3 && n % 100 !== 13 ? "rd" : "th");
+const secs = (ms) => (ms / 1000).toFixed(1) + "s";
+let board = null, reconnecting = false, startedAt = 0;
+const dots = new Map();
+function drawTrack(st) { // the race at a glance: everyone's dot between the start and the finish
+  const el = $("track"), seen = new Set();
+  for (const s of st) {
+    seen.add(s.id);
+    let d = dots.get(s.id); if (!d) { d = document.createElement("i"); el.appendChild(d); dots.set(s.id, d); }
+    d.className = s.mine ? "me" : ""; d.style.background = s.color; d.style.left = `${Math.max(0, Math.min(100, (s.x / C.finish) * 100))}%`;
+  }
+  for (const [id, d] of dots) if (!seen.has(id)) { d.remove(); dots.delete(id); }
+}
+function hud(r) {
+  const T = clock(), n = livePlayers().length;
+  $("net").textContent = ATTRACT ? "" : net.offline ? "Offline: playing with bots" : reconnecting ? "Reconnecting…" : `Online · ${n} player${n === 1 ? "" : "s"}${isHost() ? " · you run the race" : ""}`;
+  $("flipBtn").hidden = !touchUI || r.phase === "done";
+  if (ATTRACT) { for (const id of ["place", "hint", "msg"]) $(id).textContent = ""; return; }
+  const st = standings(r), mine = st.findIndex((s) => s.mine) + 1;
+  $("track").hidden = false; drawTrack(st);
+  const left = r.phase === "race" ? Math.max(0, Math.ceil((r.endsAt - T) / 1000)) : 0;
+  $("place").innerHTML = T < r.startAt ? `Race ${r.id}<small>Get ready…</small>` : `${ordinal(mine)}<small>of ${st.length} · ${me.fin ? "finished " + secs(me.fin) : left + "s left"}</small>`;
+  $("msg").innerHTML = T < r.startAt ? String(Math.ceil((r.startAt - T) / 1000)) : r.phase === "race" && T - r.startAt < 800 ? "GO!" : me.fin && r.phase === "race" ? `${ordinal(mine)}!<small>${secs(me.fin)}</small>` : "";
+  $("hint").textContent = performance.now() - startedAt < 14000 && r.phase !== "done" ? (touchUI ? "Tap anywhere to flip gravity (only while you touch the floor or ceiling)" : "Space, ↑ or click to flip gravity (only while you touch the floor or ceiling)") : "";
+  const showCard = r.phase === "done";
+  $("over").hidden = !showCard;
+  if (showCard) {
+    const won = r.results[0] && r.results[0].i === me.id && r.results[0].t;
+    $("overTitle").textContent = won ? "You win!" : r.results[0] ? `${r.results[0].i === me.id ? "You" : r.results[0].n} ${r.results[0].t ? "wins" : "got furthest"}!` : "Race over";
+    $("overSub").textContent = me.fin ? `You finished in ${secs(me.fin)}.` : "Flip earlier, flip faster.";
+    $("results").innerHTML = r.results.map((s) => `<li class="${s.i === me.id ? "me" : ""}">${esc(s.i === me.id ? myName : s.n)}<span>${s.t ? secs(s.t) : Math.round((s.x / C.finish) * 100) + "%"}</span></li>`).join("");
+    $("next").textContent = `Next race in ${Math.max(0, Math.ceil((r.endsAt - T) / 1000))}s`;
+    if (me.shownFor !== r.id) { me.shownFor = r.id; showBoard(!!won); }
+  }
+}
+function showBoard(won) {
+  const list = $("board");
+  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
+  list.innerHTML = "<li>Loading…</li>";
+  (won ? board.submit(1, "inc").catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score}</span></li>`).join("") : "<li>No wins yet. Be the first.</li>";
+  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+}
+$("again").onclick = () => { if (host.acting) host.again = true; else net.send("again", {}); };
+let actx = null;
+function sfx(kind) {
+  if (!actx || ATTRACT) return;
+  const [f0, f1, dur, vol, type] = { flip: [300, 900, 0.09, 0.05, "square"], pad: [500, 1400, 0.25, 0.06, "sawtooth"], dead: [500, 60, 0.4, 0.09, "sawtooth"], back: [300, 500, 0.12, 0.05, "sine"], win: [520, 1040, 0.5, 0.08, "triangle"] }[kind];
+  const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + dur);
+}
+
+// ── INPUT ───────────────────────────────────────────────────────────────────────────
+const touchUI = matchMedia("(pointer: coarse)").matches && !ATTRACT;
+const wake = () => { if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch {} } };
+const FLIPS = [" ", "arrowup", "arrowdown", "w", "s", "z", "enter"];
+addEventListener("keydown", (e) => { wake(); if (FLIPS.includes(e.key.toLowerCase())) { e.preventDefault(); if (!e.repeat) input.flip = true; } });
+cv.addEventListener("pointerdown", (e) => { e.preventDefault(); wake(); input.flip = true; }); // tap or click anywhere on the course
+$("flipBtn").addEventListener("pointerdown", (e) => { e.preventDefault(); wake(); input.flip = true; $("flipBtn").classList.add("on"); });
+for (const ev of ["pointerup", "pointercancel"]) $("flipBtn").addEventListener(ev, () => $("flipBtn").classList.remove("on"));
+document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
+
+// ── MAIN LOOP ───────────────────────────────────────────────────────────────────────
+let last = performance.now(), lastHb = 0, lastHud = 0, dtNow = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (performance.now() - lastTick > 1000) { hostHold = performance.now() + 700; host.acting = false; } // the tab was frozen or in the background: someone else may have hosted meanwhile, so let its state arrive, then adopt it
+  lastTick = performance.now(); // not the rAF time: after a long freeze Chrome can stamp the first frame from before it ended
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now; dtNow = dt; // the first frame can be timed before load: never negative
+  if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); fixColor(); }
+  syncClock(now);
+  if (isHost()) hostTick(dt, now); else host.acting = false;
+  const r = race();
+  if (r) { ensureCourse(r); syncViews(dt, r); myTick(dt, now, r); }
+  tickFx(dt);
+  draw(r, now);
+  if (r && now - lastHud > 120) { lastHud = now; hud(r); }
+}
+
+(async function start() {
+  net = await connect();
+  net.onState((st) => { S = st; });
+  net.on("again", () => { if (host.acting) host.again = true; });
+  net.onDisconnect(() => { reconnecting = true; $("net").textContent = "Reconnecting…"; });
+  net.onReconnect(() => { reconnecting = false; });
+  if (!net.offline && typeof MP !== "undefined") board = MP.auth({ key: MP_CONNECT.key, apiUrl: MP_CONNECT.apiUrl }).leaderboard(CONFIG.board);
+  const taken = new Set([...Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId).map(([, p]) => p.c), ...shared("bots", []).map((b) => b.c)]);
+  me.id = net.sessionId; me.color = COLORS.find((c) => !taken.has(c)) || COLORS[Math.floor(Math.random() * COLORS.length)];
+  net.me.set({ n: myName, c: me.color, hb: Date.now() });
+  if (ATTRACT) Object.assign(CONFIG, { countdown: 300, resultsMs: 1500, seats: 5 });
+  startedAt = performance.now();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
