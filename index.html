@@ -97,6 +97,7 @@ const CONFIG = {
   flipKick: 3,           // a flip pushes you off the surface this fast
   coyote: 0.08, buffer: 0.14, // forgiving flips (s): a little late off an edge, a little early before landing
   respawnMs: 900,        // ms before you're back at the start of the piece you fell in
+  respawnHold: 0.5,      // s you stand still (blinking) after coming back, to get ready before you run on
   botReact: [70, 200],   // ms a bot takes to flip once it sees it must
   botLook: 0.7,          // how far ahead a bot looks, in seconds (less = more mistakes)
   botLate: 0.12,         // chance a bot reacts much too late (and probably falls)
@@ -231,6 +232,7 @@ const startX = () => 2; // everyone starts on the same spot: the others are ghos
 /** One physics step. input = { flip (pressed now) }. Returns "flip", "land", "pad", "dead", "fin" or null. */
 function stepRunner(b, inp, dt) {
   if (b.dead || b.fin) return null;
+  if (b.hold > 0) { b.hold -= dt; return null; } // just came back: standing still for a moment
   let ev = null;
   b.coyote = b.ground ? CONFIG.coyote : b.coyote - dt;
   b.buffer = inp.flip ? CONFIG.buffer : b.buffer - dt;
@@ -258,7 +260,7 @@ function stepRunner(b, inp, dt) {
   return ev;
 }
 /** Back at the start of the piece you fell in, on the floor, gravity down. */
-function respawn(b) { Object.assign(b, newRunner(checkpointAt(b.x) + 1.2), { trail: [] }); }
+function respawn(b) { Object.assign(b, newRunner(checkpointAt(b.x) + 1.2), { trail: [], hold: CONFIG.respawnHold }); }
 
 // ── RACE (HOST) ─────────────────────────────────────────────────────────────────────
 const host = { acting: false, last: null, bots: new Map(), lastBots: 0, raceId: -1, again: false };
@@ -286,11 +288,14 @@ function seatBots() {
   let slot = humans.length;
   for (const b of host.bots.values()) Object.assign(b, newRunner(startX(slot++)), { id: b.id, name: b.name, color: b.color, flipAt: 0, lag: 80 + Math.random() * CONFIG.botStartLag });
 }
-/** The race is over: one write with the final order. */
+/** The race is over: one write with the final order. Finishers come from the host's own list (they count even if they left), then everyone else by distance. */
 function finishRace(r) {
-  const all = standings(r);
-  return writeRace({ ...r, phase: "done", endsAt: clock() + CONFIG.resultsMs, results: all.slice(0, 8).map((s) => ({ i: s.id, n: s.name, c: s.color, t: s.fin, x: Math.floor(s.x) })) });
+  const done = new Set(r.fins.map((f) => f.i)), rest = standings(r).filter((s) => !done.has(s.id)).sort((a, b) => b.x - a.x);
+  const results = [...r.fins.map((f) => ({ i: f.i, n: f.n, c: f.c, t: f.t, x: Math.floor(C.finish) })), ...rest.map((s) => ({ i: s.id, n: s.name, c: s.color, t: 0, x: Math.floor(s.x) }))];
+  return writeRace({ ...r, phase: "done", endsAt: clock() + CONFIG.resultsMs, results: results.slice(0, 8) });
 }
+/** A finish the host believes: at the finish line, and no faster than running the whole course on speed pads. */
+const fairFinish = (s) => s.x >= C.finish - 1 && s.fin >= ((C.finish - startX()) / (CONFIG.speed * CONFIG.padBoost)) * 1000;
 function hostTick(dt, now) {
   if (!host.acting) adopt();
   let r = race();
@@ -301,8 +306,8 @@ function hostTick(dt, now) {
   if (r.phase === "grid" && T >= r.startAt) r = writeRace({ ...r, phase: "race", endsAt: r.startAt + CONFIG.raceMs });
   if (r.phase === "race") {
     for (const b of host.bots.values()) botTick(b, dt, now, r);
-    const fins = standings(r).filter((s) => s.fin && !r.fins.some((f) => f.i === s.id)); // new finishers, from each runner's own state
-    if (fins.length) r = writeRace({ ...r, fins: [...r.fins, ...fins.map((s) => ({ i: s.id, t: s.fin }))].sort((a, b) => a.t - b.t), endsAt: r.fins.length ? r.endsAt : Math.min(r.endsAt, T + CONFIG.afterFirstMs) });
+    const fins = standings(r).filter((s) => s.fin && !r.fins.some((f) => f.i === s.id) && fairFinish(s)); // new finishers, from each runner's own state
+    if (fins.length) r = writeRace({ ...r, fins: [...r.fins, ...fins.map((s) => ({ i: s.id, t: s.fin, n: String(s.name).slice(0, 24), c: s.color }))].sort((a, b) => a.t - b.t), endsAt: r.fins.length ? r.endsAt : Math.min(r.endsAt, T + CONFIG.afterFirstMs) });
     const st = standings(r);
     if (T >= r.endsAt || st.every((s) => s.fin)) r = finishRace(r);
   }
@@ -489,7 +494,7 @@ function drawRunner(b, t, ghost) {
     for (let i = 1; i < b.trail.length; i++) { const p = b.trail[i - 1], q = b.trail[i]; ctx.strokeStyle = b.color; ctx.globalAlpha = (i / b.trail.length) * (ghost ? 0.25 : 0.5); ctx.lineWidth = r * 1.2 * (i / b.trail.length); ctx.beginPath(); ctx.moveTo(sx(p[0]), sy(p[1])); ctx.lineTo(sx(q[0]), sy(q[1])); ctx.stroke(); }
     ctx.globalAlpha = 1;
   }
-  ctx.globalAlpha = ghost ? 0.55 : 1;
+  ctx.globalAlpha = (ghost ? 0.55 : 1) * (b.hold > 0 && Math.floor(t * 12) % 2 ? 0.35 : 1); // blinks while getting ready after a fall
   ctx.shadowColor = b.color; ctx.shadowBlur = ghost ? 6 : 16;
   ctx.fillStyle = b.color; ctx.beginPath(); ctx.roundRect(x - HW * TS, y - r, HW * 2 * TS, r * 2, TS * 0.2); ctx.fill();
   ctx.shadowBlur = 0;
